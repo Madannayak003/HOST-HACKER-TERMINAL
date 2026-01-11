@@ -62,15 +62,13 @@ It features a **Matrix rain background**, **realistic boot sequence**, **animate
 ## Project Structure
 
 hacker-terminal/
-│
+                ├── index.html
 
-├── index.html
+                ├── hacker.js
 
-├── hacker.js
+                ├── hacker_windows.py
 
-├── hacker_windows.py
-
-├── README.md
+                ├── README.md
 
 
 # How to Run
