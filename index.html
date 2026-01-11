@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Infinite Hacker Terminal</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        /* ===== GLOBAL ===== */
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            background: black;
+            overflow: hidden;
+            font-family: "Courier New", monospace;
+        }
+
+        /* ===== MATRIX ===== */
+        canvas {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+        }
+
+        /* ===== TERMINAL ===== */
+        .terminal {
+            position: fixed;
+            inset: 0;
+            padding: 8px;
+            padding-top: 56px;
+            color: #00ff88;
+            z-index: 2;
+            white-space: pre-wrap;
+            overflow-y: auto;
+            font-size: 14px;
+            line-height: 1.35;
+            text-shadow: 0 0 3px rgba(0, 255, 136, .6), 0 0 6px rgba(0, 255, 136, .4);
+            background: radial-gradient(circle at center, rgba(0, 0, 0, .2), rgba(0, 0, 0, .85));
+        }
+
+        /* ===== SCANLINES ===== */
+        .scanlines {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 3;
+            background: repeating-linear-gradient(to bottom,
+                    rgba(0, 0, 0, .15),
+                    rgba(0, 0, 0, .15) 1px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(0, 0, 0, 0) 4px);
+        }
+
+        /* ===== NOISE ===== */
+        .noise {
+            position: fixed;
+            inset: 0;
+            z-index: 4;
+            pointer-events: none;
+            background-image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'>\
+<filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4'/></filter>\
+<rect width='200' height='200' filter='url(%23n)' opacity='0.05'/>\
+</svg>");
+        }
+
+        /* ===== BOOT BANNER ===== */
+        #bootBanner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 10px 12px;
+            background: linear-gradient(to right, #003300, #000);
+            color: #00ff88;
+            font-size: 13px;
+            z-index: 6;
+            border-bottom: 1px solid #00ff55;
+            text-shadow: 0 0 6px rgba(0, 255, 100, .6);
+        }
+
+        /* ===== HUD ===== */
+        #hud {
+            position: fixed;
+            top: 48px;
+            right: 12px;
+            background: rgba(0, 0, 0, .75);
+            color: #00ff00;
+            padding: 10px 14px;
+            font-size: 13px;
+            border: 1px solid #00ff00;
+            z-index: 7;
+            line-height: 1.4;
+        }
+
+        /* ===== LOADING OVERLAY ===== */
+        #loadingOverlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 420px;
+            z-index: 10;
+            font-family: "Courier New", monospace;
+            color: #00ff88;
+            text-align: center;
+        }
+
+        #loadingTitle {
+            margin-bottom: 10px;
+            font-size: 18px;
+            letter-spacing: 2px;
+        }
+
+        #loadingBox {
+            border: 2px solid #00ff88;
+            padding: 4px;
+        }
+
+        #loadingBar {
+            height: 18px;
+            width: 0%;
+            background: #00ff88;
+            transition: width 0.35s linear;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 8px;
+            margin-left: 2px;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+
+            0%,
+            50% {
+                opacity: 1;
+            }
+
+            51%,
+            100% {
+                opacity: 0;
+            }
+        }
+
+        .ok {
+            color: #00ff55;
+        }
+
+        .fail {
+            color: #ff3333;
+        }
+
+        .retry {
+            color: #ffaa00;
+        }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="matrix"></canvas>
+    <div class="scanlines"></div>
+    <div class="noise"></div>
+
+    <div id="bootBanner">
+        SYSTEM BOOT v3.7.1 | CPU: OK | RAM: OK | NET: ACTIVE | MODE: ROOT
+    </div>
+
+    <div id="hud"></div>
+    <div class="terminal" id="terminal"></div>
+
+    <div id="loadingOverlay" style="display:none;">
+        <div id="loadingTitle">LOADING...</div>
+        <div id="loadingBox">
+            <div id="loadingBar"></div>
+        </div>
+    </div>
+
+    <input id="mobileKeyInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="off"
+        spellcheck="false" />
+
+    <script>
+        /* ===== STATE ===== */
+        let running = true;
+        let paused = false;
+        let halted = false;
+        let speed = 30;
+        let alertsEnabled = true;
+        let loadingInProgress = false;
+        let commandsEnabled = true;
+        let stepIndex = 0;
+        let dumpInterval, matrixInterval;
+
+        /* ===== ELEMENTS ===== */
+        const terminal = document.getElementById("terminal");
+        const hud = document.getElementById("hud");
+
+        /* ===== HUD ===== */
+        function updateHUD() {
+            let state = halted ? "HALTED" : paused ? "PAUSED" : "RUNNING";
+            hud.innerHTML = `
+STATUS : ${state}<br>
+SPEED  : ${speed} ms<br>
+KEYS   : SPACE | + | - | ESC | R | A | C
+`;
+        }
+        updateHUD();
+
+        /* ===== KEY CONTROLS ===== */
+        document.addEventListener("keydown", e => {
+
+            if (e.key === "Escape" && !halted) {
+                halted = true;
+                running = false;
+                clearInterval(dumpInterval);
+                clearInterval(matrixInterval);
+                terminal.innerHTML += "\n[ PROCESS HALTED ]\n[ PRESS R TO RESTART ]\n";
+                updateHUD();
+                return;
+            }
+
+            if (halted && e.key.toLowerCase() === "r") location.reload();
+            if (halted) return;
+
+            if (e.code === "Space") paused = !paused;
+            if (e.key === "+") speed = Math.max(10, speed - 5);
+            if (e.key === "-") speed += 5;
+            if (e.key.toLowerCase() === "a") alertsEnabled = !alertsEnabled;
+            if (e.key.toLowerCase() === "c") commandsEnabled = !commandsEnabled;
+
+            updateHUD();
+        });
+
+        /* ===== MATRIX ===== */
+        const canvas = document.getElementById("matrix");
+        const ctx = canvas.getContext("2d");
+
+        function resize() {
+            canvas.width = innerWidth;
+            canvas.height = innerHeight;
+        }
+        resize();
+        addEventListener("resize", resize);
+
+        const chars = "01ABCDEFGHIJKLMNOPQRSTUVWXYZ@$#%";
+        const fontSize = 14;
+        let columns = Math.floor(innerWidth / fontSize);
+        let drops = Array(columns).fill(1);
+
+        matrixInterval = setInterval(() => {
+            if (!running || paused) return;
+            ctx.fillStyle = "rgba(0,0,0,0.08)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#00ff00";
+            ctx.font = fontSize + "px monospace";
+            drops.forEach((y, i) => {
+                const t = chars[Math.floor(Math.random() * chars.length)];
+                ctx.fillText(t, i * fontSize, y * fontSize);
+                drops[i] = y * fontSize > canvas.height && Math.random() > 0.97 ? 0 : y + 1;
+            });
+        }, 33);
+
+        /* ===== STARTUP ===== */
+        const startup = [
+            "Initializing system",
+            "Loading BIOS modules",
+            "Verifying hardware integrity",
+            "CPU check",
+            "Memory check",
+            "Mounting virtual file system",
+            "Loading kernel modules",
+            "Resolving kernel dependencies",
+            "Applying security policies",
+            "Initializing network stack",
+            "Requesting DHCP lease",
+            "Accessing secure server",
+            "Performing TLS handshake",
+            "Validating encryption keys",
+            "Bypassing firewall",
+            "Decrypting data packets",
+            "Reassembling data streams",
+            "Establishing remote connection",
+            "Authenticating credentials",
+            "Session token accepted",
+            "Remote host synchronized"
+        ];
+
+        let li = 0, ci = 0;
+        function boot() {
+            if (stepIndex >= startup.length) {
+                terminal.innerHTML += "\n";
+                runLoadingSequence(); // continue exactly as before
+                return;
+            }
+
+            const line = startup[stepIndex];
+            const cursor = "<span class='cursor'></span>";
+            terminal.innerHTML += line + cursor;
+
+            // random typing delay (realistic)
+            const typeDelay = Math.floor(Math.random() * 120) + 80;
+
+            setTimeout(() => {
+                terminal.innerHTML = terminal.innerHTML.replace(cursor, "");
+
+                // random failure chance (20%)
+                if (Math.random() < 0.2) {
+                    terminal.innerHTML +=
+                        " <span class='fail'>FAILED</span>\n";
+                    terminal.innerHTML +=
+                        "<span class='retry'>Retrying...</span>\n";
+
+                    setTimeout(() => {
+                        terminal.innerHTML +=
+                            line + " <span class='ok'>OK</span>\n";
+                        terminal.scrollTop = terminal.scrollHeight;
+                        stepIndex++;
+                        boot();
+                    }, 600 + Math.random() * 800);
+
+                } else {
+                    terminal.innerHTML +=
+                        " <span class='ok'>✔ OK</span>\n";
+                    terminal.scrollTop = terminal.scrollHeight;
+                    stepIndex++;
+                    setTimeout(boot, Math.random() * 300 + 150);
+                }
+            }, typeDelay);
+        }
+
+        /* ===== DUMP ===== */
+        function randomLine() {
+            const terminalWidth = terminal.clientWidth;
+            const charWidth = 8; // approx width of Courier New at 14px
+            const count = Math.floor(terminalWidth / charWidth);
+
+            if (Math.random() < 0.15) {
+                let p = Math.floor(Math.random() * 100);
+                let f = Math.floor(p / 5);
+                return `Progress: [${"#".repeat(f)}${"-".repeat(20 - f)}] ${p}%`;
+            }
+
+            return Array.from(
+                { length: count },
+                () => chars[Math.floor(Math.random() * chars.length)]
+            ).join("");
+        }
+
+
+        function runLoadingSequence() {
+            if (!running || paused || loadingInProgress) return;
+
+            loadingInProgress = true;
+
+            const steps = [5, 10, 25, 28, 30, 36, 40, 58, 66, 68, 70, 74, 80, 83, 84, 89, 92, 97, 100];
+            let index = 0;
+
+            const overlay = document.getElementById("loadingOverlay");
+            const bar = document.getElementById("loadingBar");
+
+            overlay.style.display = "block";
+            bar.style.width = "0%";
+
+            const interval = setInterval(() => {
+                if (!running || paused) return;
+
+                const percent = steps[index];
+                bar.style.width = percent + "%";
+
+                index++;
+
+                if (percent === 97) {
+                    clearInterval(interval);
+                    setTimeout(() => {
+                        bar.style.width = "100%";
+
+                        setTimeout(() => {
+                            overlay.style.display = "none";
+                            terminal.innerHTML += "[ DONE ]\n";
+                            terminal.innerHTML += "Access granted ✔\n";
+                            terminal.scrollTop = terminal.scrollHeight;
+
+                            loadingInProgress = false;
+                            startDump(); // your SAME loop
+                        }, 2000);
+                    }, 3000);
+                }
+            }, 850);
+        }
+
+        function infiniteDump() {
+            dumpInterval = setInterval(() => {
+                if (!running || paused || loadingInProgress) return;
+
+                terminal.innerHTML += randomLine() + "\n";
+                terminal.scrollTop = terminal.scrollHeight;
+
+                const lines = terminal.innerHTML.split("\n");
+                if (lines.length > 2200) {
+                    terminal.innerHTML = lines.slice(-1600).join("\n");
+                }
+            }, speed);
+        }
+
+
+        function startDump() {
+            terminal.innerHTML += ">>> Welcome, root@system\n>>> System fully operational\n\n";
+            dumpInterval = setInterval(() => {
+                if (!running || paused) return;
+
+                if (alertsEnabled && Math.random() < 0.015)
+                    terminal.innerHTML += "\n[ ALERT ] INTRUSION DETECTED\n";
+
+                if (commandsEnabled && Math.random() < 0.12)
+                    terminal.innerHTML += `\n> ssh root@192.168.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}\n[ OK ]\n`;
+
+                terminal.innerHTML += randomLine() + "\n";
+                terminal.scrollTop = terminal.scrollHeight;
+
+                let lines = terminal.innerHTML.split("\n");
+                if (lines.length > 2200) terminal.innerHTML = lines.slice(-1600).join("\n");
+            }, speed);
+        }
+        /* ===== START ===== */
+        boot();
+    </script>
+
+</body>
+
+</html>
